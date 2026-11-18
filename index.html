@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Assignly</title>
+<style>
+  :root { color-scheme:dark; --bg:#0f1219; --card:#171b25; --ink:#e6e9f0; --muted:#8b93a7; --line:#2a3040; --accent:#5b83ff; --field:#0f1219;
+          --ok:#4cd08a; --okbg:#12301f; --warn:#f0b840; --warnbg:#3a2e10; --bad:#ff7b6e; --badbg:#3d1a17; }
+  :root[data-theme="light"] { color-scheme:light; --bg:#f6f7f9; --card:#fff; --ink:#1d2433; --muted:#667085; --line:#e4e7ec; --accent:#2f5bea; --field:#fff;
+          --ok:#117a45; --okbg:#e3f6ec; --warn:#9a6700; --warnbg:#fff4d6; --bad:#b42318; --badbg:#fde8e6; }
+  :root[data-theme="light"] button.ok, :root[data-theme="light"] button.bad { color:#fff; }
+  #theme { padding:6px 10px; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--ink); }
+  header { background:var(--card); border-bottom:1px solid var(--line); padding:12px 20px; display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  header h1 { font-size:17px; margin:0; }
+  main { max-width:960px; margin:24px auto; padding:0 16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:18px; margin-bottom:18px; }
+  .card h2 { margin:0 0 12px; font-size:16px; }
+  label { display:block; font-size:13px; color:var(--muted); margin-bottom:4px; }
+  input, textarea, select { width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:7px; font:inherit; background:var(--field); color:inherit; }
+  textarea { resize:vertical; min-height:60px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:12px; }
+  .full { grid-column:1/-1; }
+  button { font:inherit; padding:8px 14px; border-radius:7px; border:1px solid var(--line); background:var(--card); cursor:pointer; color:inherit; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.ok { background:var(--ok); border-color:var(--ok); color:#06210f; }
+  button.bad { background:var(--bad); border-color:var(--bad); color:#2a0a07; }
+  button:disabled { opacity:.5; cursor:default; }
+  button.link { border:0; background:none; color:var(--accent); padding:2px 6px; }
+  table { width:100%; border-collapse:collapse; }
+  th, td { text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
+  td.num, th.num { text-align:right; white-space:nowrap; }
+  .badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; font-weight:600; }
+  .badge.pending { background:var(--warnbg); color:var(--warn); }
+  .badge.approved { background:var(--okbg); color:var(--ok); }
+  .badge.rejected { background:var(--badbg); color:var(--bad); }
+  .muted { color:var(--muted); font-size:13px; }
+  .msg { padding:8px 12px; border-radius:7px; margin-bottom:12px; font-size:14px; }
+  .msg.err { background:var(--badbg); color:var(--bad); }
+  .msg.info { background:var(--okbg); color:var(--ok); }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .tabs button { border-radius:7px 7px 0 0; }
+  .tabs button.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .comment { background:var(--badbg); color:var(--bad); padding:6px 8px; border-radius:6px; margin-top:4px; font-size:13px; }
+  .comment.ok { background:var(--okbg); color:var(--ok); }
+  .reviewbox { display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
+  .reviewbox input { flex:1 1 160px; }
+  .hidden { display:none !important; }
+  .authbox { max-width:380px; margin:60px auto; }
+</style>
+<script>
+  (function () {
+    var t = null;
+    try { t = localStorage.getItem("assignly-theme"); } catch (e) {}
+    if (!t) t = window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+    document.documentElement.setAttribute("data-theme", t);
+  })();
+</script>
+</head>
+<body>
+<header>
+  <h1>Assignly</h1>
+  <div class="row">
+    <button id="theme" title="Toggle light/dark" aria-label="Toggle light/dark mode">☀️</button>
+    <div class="row hidden" id="userbar">
+      <span class="muted" id="whoami"></span>
+      <button id="signout">Sign out</button>
+    </div>
+  </div>
+</header>
+<main>
+  <div id="setup-warning" class="msg err hidden">Supabase isn't configured yet. Edit <code>config.js</code> with your project URL and anon key.</div>
+
+  <!-- Auth -->
+  <section id="auth" class="card authbox hidden">
+    <div class="tabs row" style="margin-bottom:12px">
+      <button id="tab-in" class="active">Sign in</button>
+      <button id="tab-up">Create account</button>
+    </div>
+    <div id="auth-msg"></div>
+    <form id="auth-form">
+      <div id="name-wrap" class="hidden" style="margin-bottom:10px">
+        <label for="fullname">Full name</label>
+        <input id="fullname" autocomplete="name">
+      </div>
+      <div style="margin-bottom:10px">
+        <label for="email">Email</label>
+        <input id="email" type="email" required autocomplete="email">
+      </div>
+      <div style="margin-bottom:14px">
+        <label for="password">Password (6+ characters)</label>
+        <input id="password" type="password" required minlength="6" autocomplete="current-password">
+      </div>
+      <button class="primary" id="auth-submit" style="width:100%">Sign in</button>
+    </form>
+  </section>
+
+  <!-- Student -->
+  <section id="student" class="hidden">
+    <div class="card">
+      <h2 id="form-title">Log hours</h2>
+      <div id="form-msg"></div>
+      <form id="entry-form">
+        <div class="grid">
+          <div><label for="e-date">Date</label><input id="e-date" type="date" required></div>
+          <div><label for="e-hours">Hours</label><input id="e-hours" type="number" step="0.25" min="0.25" max="24" required></div>
+          <div class="full"><label for="e-assign">Assignment</label><input id="e-assign" maxlength="200" required placeholder="e.g. Chapter 5 essay"></div>
+          <div class="full"><label for="e-notes">What did you work on? (optional)</label><textarea id="e-notes" maxlength="2000"></textarea></div>
+        </div>
+        <div class="row" style="margin-top:12px">
+          <button class="primary" id="e-submit">Submit for review</button>
+          <button type="button" id="e-cancel" class="hidden">Cancel edit</button>
+        </div>
+      </form>
+    </div>
+    <div class="card">
+      <h2>My entries <span class="muted" id="my-total"></span></h2>
+      <div id="my-list"></div>
+    </div>
+  </section>
+
+  <!-- Reviewer -->
+  <section id="reviewer" class="hidden">
+    <div class="card">
+      <h2>Review entries</h2>
+      <div class="grid" style="margin-bottom:12px">
+        <div><label for="f-status">Status</label>
+          <select id="f-status">
+            <option value="pending">Pending</option>
+            <option value="all">All</option>
+            <option value="approved">Approved</option>
+            <option value="rejected">Rejected</option>
+          </select></div>
+        <div><label for="f-student">Student</label><select id="f-student"><option value="">All students</option></select></div>
+        <div><label for="f-from">From</label><input id="f-from" type="date"></div>
+        <div><label for="f-to">To</label><input id="f-to" type="date"></div>
+      </div>
+      <div id="rv-msg"></div>
+      <div id="rv-summary" class="muted" style="margin-bottom:8px"></div>
+      <div id="rv-list"></div>
+    </div>
+  </section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const root = document.documentElement;
+  const syncThemeBtn = () => { $("theme").textContent = root.getAttribute("data-theme") === "light" ? "🌙" : "☀️"; };
+  $("theme").onclick = () => {
+    const next = root.getAttribute("data-theme") === "light" ? "dark" : "light";
+    root.setAttribute("data-theme", next);
+    try { localStorage.setItem("assignly-theme", next); } catch (e) {}
+    syncThemeBtn();
+  };
+  syncThemeBtn();
+  const cfg = window.TIMESHEET_CONFIG || {};
+  if (!cfg.SUPABASE_URL || cfg.SUPABASE_URL.includes("YOUR-PROJECT") || !window.supabase) {
+    $("setup-warning").classList.remove("hidden");
+    return;
+  }
+  const db = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
+
+  let me = null;            // {id, email, full_name, role}
+  let editingId = null;
+  let signUpMode = false;
+
+  const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  const today = () => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0,10); };
+  const fmtDate = s => new Date(s + "T00:00:00").toLocaleDateString(undefined, {weekday:"short", month:"short", day:"numeric", year:"numeric"});
+  const fmtH = n => (Math.round(Number(n) * 100) / 100).toString();
+  const show = (id, on) => $(id).classList.toggle("hidden", !on);
+  const flash = (id, text, kind="err") => { $(id).innerHTML = text ? `<div class="msg ${kind}">${esc(text)}</div>` : ""; };
+
+  // ---------- Auth ----------
+  function setMode(up) {
+    signUpMode = up;
+    $("tab-in").classList.toggle("active", !up);
+    $("tab-up").classList.toggle("active", up);
+    show("name-wrap", up);
+    $("fullname").required = up;
+    $("auth-submit").textContent = up ? "Create account" : "Sign in";
+    $("password").autocomplete = up ? "new-password" : "current-password";
+    flash("auth-msg", "");
+  }
+  $("tab-in").onclick = () => setMode(false);
+  $("tab-up").onclick = () => setMode(true);
+
+  $("auth-form").onsubmit = async e => {
+    e.preventDefault();
+    flash("auth-msg", "");
+    $("auth-submit").disabled = true;
+    const email = $("email").value.trim(), password = $("password").value;
+    try {
+      if (signUpMode) {
+        const { data, error } = await db.auth.signUp({ email, password, options: { data: { full_name: $("fullname").value.trim() } } });
+        if (error) throw error;
+        if (!data.session) flash("auth-msg", "Account created. Check your email to confirm, then sign in.", "info");
+      } else {
+        const { error } = await db.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+      }
+    } catch (err) { flash("auth-msg", err.message); }
+    $("auth-submit").disabled = false;
+  };
+
+  $("signout").onclick = () => db.auth.signOut();
+
+  db.auth.onAuthStateChange((_evt, session) => { setTimeout(() => route(session), 0); });
+  db.auth.getSession().then(({ data }) => route(data.session));
+
+  async function route(session) {
+    show("auth", false); show("student", false); show("reviewer", false); show("userbar", false);
+    if (!session) { me = null; show("auth", true); return; }
+    const { data, error } = await db.from("profiles").select("*").eq("id", session.user.id).single();
+    if (error || !data) { show("auth", true); flash("auth-msg", "Couldn't load your profile. Did you run schema.sql?"); return; }
+    me = data;
+    $("whoami").textContent = `${me.full_name || me.email} (${me.role})`;
+    show("userbar", true);
+    if (me.role === "reviewer") { show("reviewer", true); await loadStudents(); await loadReview(); }
+    else { show("student", true); resetForm(); await loadMine(); }
+  }
+
+  // ---------- Student ----------
+  function resetForm() {
+    editingId = null;
+    $("entry-form").reset();
+    $("e-date").value = today();
+    $("form-title").textContent = "Log hours";
+    $("e-submit").textContent = "Submit for review";
+    show("e-cancel", false);
+  }
+  $("e-cancel").onclick = () => { resetForm(); flash("form-msg", ""); };
+
+  $("entry-form").onsubmit = async e => {
+    e.preventDefault();
+    flash("form-msg", "");
+    const row = {
+      work_date: $("e-date").value,
+      hours: parseFloat($("e-hours").value),
+      assignment: $("e-assign").value.trim(),
+      notes: $("e-notes").value.trim() || null,
+      status: "pending",
+    };
+    $("e-submit").disabled = true;
+    let error;
+    if (editingId) ({ error } = await db.from("entries").update(row).eq("id", editingId));
+    else ({ error } = await db.from("entries").insert({ ...row, student_id: me.id }));
+    $("e-submit").disabled = false;
+    if (error) return flash("form-msg", error.message);
+    flash("form-msg", editingId ? "Entry updated and resubmitted." : "Submitted for review.", "info");
+    resetForm();
+    loadMine();
+  };
+
+  async function loadMine() {
+    const { data, error } = await db.from("entries").select("*").eq("student_id", me.id)
+      .order("work_date", { ascending: false }).order("created_at", { ascending: false }).limit(200);
+    if (error) return ($("my-list").innerHTML = `<div class="msg err">${esc(error.message)}</div>`);
+    const total = data.reduce((s, r) => s + Number(r.hours), 0);
+    const approved = data.filter(r => r.status === "approved").reduce((s, r) => s + Number(r.hours), 0);
+    $("my-total").textContent = `· ${fmtH(total)} h logged, ${fmtH(approved)} h approved`;
+    if (!data.length) return ($("my-list").innerHTML = `<p class="muted">Nothing logged yet.</p>`);
+    $("my-list").innerHTML = `<table><thead><tr><th>Date</th><th>Assignment</th><th class="num">Hours</th><th>Status</th><th></th></tr></thead><tbody>${
+      data.map(r => `<tr>
+        <td>${esc(fmtDate(r.work_date))}</td>
+        <td>${esc(r.assignment)}${r.notes ? `<div class="muted">${esc(r.notes)}</div>` : ""}
+            ${r.reviewer_comment ? `<div class="comment ${r.status === "approved" ? "ok" : ""}">Reviewer: ${esc(r.reviewer_comment)}</div>` : ""}</td>
+        <td class="num">${fmtH(r.hours)}</td>
+        <td><span class="badge ${r.status}">${r.status}</span></td>
+        <td class="num">${r.status !== "approved" ? `<button class="link" data-edit="${r.id}">${r.status === "rejected" ? "Fix & resubmit" : "Edit"}</button><button class="link" data-del="${r.id}">Delete</button>` : ""}</td>
+      </tr>`).join("")}</tbody></table>`;
+    $("my-list").querySelectorAll("[data-edit]").forEach(b => b.onclick = () => {
+      const r = data.find(x => x.id === b.dataset.edit);
+      editingId = r.id;
+      $("e-date").value = r.work_date; $("e-hours").value = r.hours;
+      $("e-assign").value = r.assignment; $("e-notes").value = r.notes || "";
+      $("form-title").textContent = "Edit entry";
+      $("e-submit").textContent = "Save & resubmit";
+      show("e-cancel", true);
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    });
+    $("my-list").querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
+      if (!confirm("Delete this entry?")) return;
+      const { error } = await db.from("entries").delete().eq("id", b.dataset.del);
+      if (error) flash("form-msg", error.message); else loadMine();
+    });
+  }
+
+  // ---------- Reviewer ----------
+  async function loadStudents() {
+    const { data } = await db.from("profiles").select("id,full_name,email").eq("role", "student").order("full_name");
+    const sel = $("f-student"), keep = sel.value;
+    sel.innerHTML = `<option value="">All students</option>` +
+      (data || []).map(p => `<option value="${esc(p.id)}">${esc(p.full_name || p.email)}</option>`).join("");
+    sel.value = keep;
+  }
+
+  ["f-status","f-student","f-from","f-to"].forEach(id => $(id).onchange = () => loadReview());
+
+  async function loadReview() {
+    flash("rv-msg", "");
+    let q = db.from("entries").select("*, profiles!entries_student_id_fkey(full_name,email)")
+      .order("work_date", { ascending: false }).order("created_at", { ascending: false }).limit(500);
+    const st = $("f-status").value;
+    if (st !== "all") q = q.eq("status", st);
+    if ($("f-student").value) q = q.eq("student_id", $("f-student").value);
+    if ($("f-from").value) q = q.gte("work_date", $("f-from").value);
+    if ($("f-to").value) q = q.lte("work_date", $("f-to").value);
+    const { data, error } = await q;
+    if (error) return flash("rv-msg", error.message);
+    const total = data.reduce((s, r) => s + Number(r.hours), 0);
+    $("rv-summary").textContent = `${data.length} entries · ${fmtH(total)} hours`;
+    if (!data.length) return ($("rv-list").innerHTML = `<p class="muted">Nothing here.</p>`);
+    $("rv-list").innerHTML = `<table><thead><tr><th>Student</th><th>Date</th><th>Assignment</th><th class="num">Hours</th><th>Review</th></tr></thead><tbody>${
+      data.map(r => `<tr>
+        <td>${esc(r.profiles?.full_name || r.profiles?.email || "?")}</td>
+        <td>${esc(fmtDate(r.work_date))}</td>
+        <td>${esc(r.assignment)}${r.notes ? `<div class="muted">${esc(r.notes)}</div>` : ""}</td>
+        <td class="num">${fmtH(r.hours)}</td>
+        <td><span class="badge ${r.status}">${r.status}</span>
+          ${r.reviewer_comment ? `<div class="muted">${esc(r.reviewer_comment)}</div>` : ""}
+          <div class="reviewbox" data-id="${r.id}">
+            <input placeholder="Comment (optional)" value="">
+            <button class="ok" data-act="approved">Approve</button>
+            <button class="bad" data-act="rejected">Reject</button>
+          </div></td>
+      </tr>`).join("")}</tbody></table>`;
+    $("rv-list").querySelectorAll(".reviewbox").forEach(box => {
+      box.querySelectorAll("button").forEach(btn => btn.onclick = async () => {
+        const comment = box.querySelector("input").value.trim();
+        if (btn.dataset.act === "rejected" && !comment) return flash("rv-msg", "Add a comment explaining the rejection.");
+        box.querySelectorAll("button").forEach(b => b.disabled = true);
+        const { error } = await db.from("entries").update({
+          status: btn.dataset.act, reviewer_comment: comment || null, reviewed_at: new Date().toISOString()
+        }).eq("id", box.dataset.id);
+        if (error) { flash("rv-msg", error.message); box.querySelectorAll("button").forEach(b => b.disabled = false); }
+        else loadReview();
+      });
+    });
+  }
+})();
+</script>
+</body>
+</html>
