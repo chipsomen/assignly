@@ -218,7 +218,12 @@
     show("auth", false); show("student", false); show("reviewer", false); show("userbar", false);
     if (!session) { me = null; show("auth", true); return; }
     const { data, error } = await db.from("profiles").select("*").eq("id", session.user.id).single();
-    if (error || !data) { show("auth", true); flash("auth-msg", "Couldn't load your profile. Did you run schema.sql?"); return; }
+    if (error || !data) {
+      show("auth", true);
+      flash("auth-msg", "Couldn't load your profile. " + (error ? `[${error.code || "no code"}] ${error.message}` : "No row returned for user " + session.user.id));
+      console.error("profile load failed", error, session.user);
+      return;
+    }
     me = data;
     $("whoami").textContent = `${me.full_name || me.email} (${me.role})`;
     show("userbar", true);
