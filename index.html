@@ -20,6 +20,7 @@
   .card h2 { margin:0 0 12px; font-size:16px; }
   label { display:block; font-size:13px; color:var(--muted); margin-bottom:4px; }
   input, textarea, select { width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:7px; font:inherit; background:var(--field); color:inherit; }
+  input[type=file] { padding:6px; }
   textarea { resize:vertical; min-height:60px; }
   .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:12px; }
   .full { grid-column:1/-1; }
@@ -33,6 +34,8 @@
   th, td { text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); vertical-align:top; }
   th { font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
   td.num, th.num { text-align:right; white-space:nowrap; }
+  tr.dayrow td { background:var(--bg); font-weight:600; padding:7px 8px; border-bottom:1px solid var(--line); }
+  tr.dayrow .daytotal { color:var(--muted); font-weight:400; margin-left:8px; }
   .badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; font-weight:600; }
   .badge.pending { background:var(--warnbg); color:var(--warn); }
   .badge.approved { background:var(--okbg); color:var(--ok); }
@@ -42,12 +45,18 @@
   .msg.err { background:var(--badbg); color:var(--bad); }
   .msg.info { background:var(--okbg); color:var(--ok); }
   .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .between { justify-content:space-between; }
   .tabs button { border-radius:7px 7px 0 0; }
   .tabs button.active { background:var(--accent); color:#fff; border-color:var(--accent); }
   .comment { background:var(--badbg); color:var(--bad); padding:6px 8px; border-radius:6px; margin-top:4px; font-size:13px; }
   .comment.ok { background:var(--okbg); color:var(--ok); }
   .reviewbox { display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
   .reviewbox input { flex:1 1 160px; }
+  .thumbs { display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
+  .thumbs img { width:64px; height:64px; object-fit:cover; border-radius:6px; border:1px solid var(--line); display:block; }
+  .chip { position:relative; }
+  .chip button { position:absolute; top:-6px; right:-6px; width:20px; height:20px; padding:0; border-radius:50%; line-height:1; font-size:13px; }
+  .sortbox { width:auto; min-width:150px; }
   .hidden { display:none !important; }
   .authbox { max-width:380px; margin:60px auto; }
 </style>
@@ -109,6 +118,11 @@
           <div><label for="e-hours">Hours</label><input id="e-hours" type="number" step="0.25" min="0.25" max="24" required></div>
           <div class="full"><label for="e-assign">Assignment</label><input id="e-assign" maxlength="200" required placeholder="e.g. Chapter 5 essay"></div>
           <div class="full"><label for="e-notes">What did you work on? (optional)</label><textarea id="e-notes" maxlength="2000"></textarea></div>
+          <div class="full">
+            <label for="e-files">Attach images (optional: up to 5, 5 MB each; JPG, PNG, GIF or WebP)</label>
+            <input id="e-files" type="file" accept="image/jpeg,image/png,image/gif,image/webp" multiple>
+            <div id="e-existing" class="thumbs"></div>
+          </div>
         </div>
         <div class="row" style="margin-top:12px">
           <button class="primary" id="e-submit">Submit for review</button>
@@ -117,7 +131,13 @@
       </form>
     </div>
     <div class="card">
-      <h2>My entries <span class="muted" id="my-total"></span></h2>
+      <div class="row between" style="margin-bottom:12px">
+        <h2 style="margin:0">My entries <span class="muted" id="my-total"></span></h2>
+        <select id="my-sort" class="sortbox" aria-label="Sort days">
+          <option value="desc">Newest day first</option>
+          <option value="asc">Oldest day first</option>
+        </select>
+      </div>
       <div id="my-list"></div>
     </div>
   </section>
@@ -137,6 +157,11 @@
         <div><label for="f-student">Student</label><select id="f-student"><option value="">All students</option></select></div>
         <div><label for="f-from">From</label><input id="f-from" type="date"></div>
         <div><label for="f-to">To</label><input id="f-to" type="date"></div>
+        <div><label for="f-sort">Sort days</label>
+          <select id="f-sort">
+            <option value="desc">Newest day first</option>
+            <option value="asc">Oldest day first</option>
+          </select></div>
       </div>
       <div id="rv-msg"></div>
       <div id="rv-summary" class="muted" style="margin-bottom:8px"></div>
@@ -159,6 +184,7 @@
     syncThemeBtn();
   };
   syncThemeBtn();
+
   const cfg = window.TIMESHEET_CONFIG || {};
   if (!cfg.SUPABASE_URL || cfg.SUPABASE_URL.includes("YOUR-PROJECT") || !window.supabase) {
     $("setup-warning").classList.remove("hidden");
@@ -166,9 +192,17 @@
   }
   const db = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
 
+  const BUCKET = "attachments", MAX_FILES = 5, MAX_BYTES = 5 * 1024 * 1024;
+  const OK_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+
   let me = null;            // {id, email, full_name, role}
   let editingId = null;
+  let keptPaths = [];       // attachments retained while editing
+  let removedPaths = [];    // attachments the student removed while editing
   let signUpMode = false;
+  let myData = [];
+  let rvData = [];
+  const urlCache = {};      // storage path -> signed URL
 
   const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   const today = () => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0,10); };
@@ -176,6 +210,35 @@
   const fmtH = n => (Math.round(Number(n) * 100) / 100).toString();
   const show = (id, on) => $(id).classList.toggle("hidden", !on);
   const flash = (id, text, kind="err") => { $(id).innerHTML = text ? `<div class="msg ${kind}">${esc(text)}</div>` : ""; };
+
+  // ---------- Shared helpers ----------
+  // Group entries by work_date. dir = "desc" (newest day first) or "asc".
+  function groupByDay(rows, dir) {
+    const sorted = [...rows].sort((a, b) =>
+      a.work_date === b.work_date ? (a.created_at < b.created_at ? -1 : 1) : (a.work_date < b.work_date ? -1 : 1));
+    if (dir === "desc") sorted.reverse();
+    const groups = [];
+    for (const r of sorted) {
+      let g = groups[groups.length - 1];
+      if (!g || g.date !== r.work_date) { g = { date: r.work_date, rows: [], hours: 0 }; groups.push(g); }
+      g.rows.push(r);
+      g.hours += Number(r.hours);
+    }
+    return groups;
+  }
+  const dayRow = (g, cols) =>
+    `<tr class="dayrow"><td colspan="${cols}">${esc(fmtDate(g.date))}<span class="daytotal">${fmtH(g.hours)} h</span></td></tr>`;
+
+  async function signUrls(paths) {
+    const need = [...new Set(paths.filter(p => p && !urlCache[p]))];
+    if (!need.length) return;
+    const { data } = await db.storage.from(BUCKET).createSignedUrls(need, 3600);
+    (data || []).forEach(d => { if (d.signedUrl) urlCache[d.path] = d.signedUrl; });
+  }
+  const thumbs = paths => (paths && paths.length)
+    ? `<div class="thumbs">${paths.filter(p => urlCache[p]).map(p =>
+        `<a href="${esc(urlCache[p])}" target="_blank" rel="noopener"><img src="${esc(urlCache[p])}" alt="attachment" loading="lazy"></a>`).join("")}</div>`
+    : "";
 
   // ---------- Auth ----------
   function setMode(up) {
@@ -232,19 +295,37 @@
   }
 
   // ---------- Student ----------
+  function renderExisting() {
+    $("e-existing").innerHTML = keptPaths.map(p => urlCache[p]
+      ? `<div class="chip"><img src="${esc(urlCache[p])}" alt="attachment"><button type="button" data-rm="${esc(p)}" title="Remove" aria-label="Remove image">×</button></div>`
+      : "").join("");
+    $("e-existing").querySelectorAll("[data-rm]").forEach(b => b.onclick = () => {
+      removedPaths.push(b.dataset.rm);
+      keptPaths = keptPaths.filter(p => p !== b.dataset.rm);
+      renderExisting();
+    });
+  }
+
   function resetForm() {
-    editingId = null;
+    editingId = null; keptPaths = []; removedPaths = [];
     $("entry-form").reset();
     $("e-date").value = today();
     $("form-title").textContent = "Log hours";
     $("e-submit").textContent = "Submit for review";
     show("e-cancel", false);
+    renderExisting();
   }
   $("e-cancel").onclick = () => { resetForm(); flash("form-msg", ""); };
 
   $("entry-form").onsubmit = async e => {
     e.preventDefault();
     flash("form-msg", "");
+    const files = Array.from($("e-files").files);
+    if (keptPaths.length + files.length > MAX_FILES) return flash("form-msg", `You can attach up to ${MAX_FILES} images per entry.`);
+    for (const f of files) {
+      if (!OK_TYPES.includes(f.type)) return flash("form-msg", `"${f.name}" isn't a supported image (use JPG, PNG, GIF or WebP).`);
+      if (f.size > MAX_BYTES) return flash("form-msg", `"${f.name}" is over 5 MB.`);
+    }
     const row = {
       work_date: $("e-date").value,
       hours: parseFloat($("e-hours").value),
@@ -253,47 +334,79 @@
       status: "pending",
     };
     $("e-submit").disabled = true;
-    let error;
-    if (editingId) ({ error } = await db.from("entries").update(row).eq("id", editingId));
-    else ({ error } = await db.from("entries").insert({ ...row, student_id: me.id }));
+    const uploaded = [];
+    const wasEditing = !!editingId;
+    try {
+      for (const f of files) {
+        const safe = f.name.replace(/[^a-zA-Z0-9._-]/g, "_").slice(-80);
+        const path = `${me.id}/${crypto.randomUUID()}-${safe}`;
+        const { error } = await db.storage.from(BUCKET).upload(path, f, { contentType: f.type });
+        if (error) throw error;
+        uploaded.push(path);
+      }
+      row.attachments = [...keptPaths, ...uploaded];
+      let error;
+      if (editingId) ({ error } = await db.from("entries").update(row).eq("id", editingId));
+      else ({ error } = await db.from("entries").insert({ ...row, student_id: me.id }));
+      if (error) throw error;
+    } catch (err) {
+      if (uploaded.length) await db.storage.from(BUCKET).remove(uploaded);
+      $("e-submit").disabled = false;
+      return flash("form-msg", err.message);
+    }
+    if (removedPaths.length) await db.storage.from(BUCKET).remove(removedPaths);
     $("e-submit").disabled = false;
-    if (error) return flash("form-msg", error.message);
-    flash("form-msg", editingId ? "Entry updated and resubmitted." : "Submitted for review.", "info");
+    flash("form-msg", wasEditing ? "Entry updated and resubmitted." : "Submitted for review.", "info");
     resetForm();
     loadMine();
   };
 
+  $("my-sort").onchange = () => renderMine();
+
   async function loadMine() {
     const { data, error } = await db.from("entries").select("*").eq("student_id", me.id)
-      .order("work_date", { ascending: false }).order("created_at", { ascending: false }).limit(200);
+      .order("work_date", { ascending: false }).limit(500);
     if (error) return ($("my-list").innerHTML = `<div class="msg err">${esc(error.message)}</div>`);
+    myData = data;
+    await signUrls(data.flatMap(r => r.attachments || []));
+    renderMine();
+  }
+
+  function renderMine() {
+    const data = myData;
     const total = data.reduce((s, r) => s + Number(r.hours), 0);
     const approved = data.filter(r => r.status === "approved").reduce((s, r) => s + Number(r.hours), 0);
     $("my-total").textContent = `· ${fmtH(total)} h logged, ${fmtH(approved)} h approved`;
     if (!data.length) return ($("my-list").innerHTML = `<p class="muted">Nothing logged yet.</p>`);
-    $("my-list").innerHTML = `<table><thead><tr><th>Date</th><th>Assignment</th><th class="num">Hours</th><th>Status</th><th></th></tr></thead><tbody>${
-      data.map(r => `<tr>
-        <td>${esc(fmtDate(r.work_date))}</td>
+    const groups = groupByDay(data, $("my-sort").value);
+    $("my-list").innerHTML = `<table><thead><tr><th>Assignment</th><th class="num">Hours</th><th>Status</th><th></th></tr></thead><tbody>${
+      groups.map(g => dayRow(g, 4) + g.rows.map(r => `<tr>
         <td>${esc(r.assignment)}${r.notes ? `<div class="muted">${esc(r.notes)}</div>` : ""}
+            ${thumbs(r.attachments)}
             ${r.reviewer_comment ? `<div class="comment ${r.status === "approved" ? "ok" : ""}">Reviewer: ${esc(r.reviewer_comment)}</div>` : ""}</td>
         <td class="num">${fmtH(r.hours)}</td>
         <td><span class="badge ${r.status}">${r.status}</span></td>
         <td class="num">${r.status !== "approved" ? `<button class="link" data-edit="${r.id}">${r.status === "rejected" ? "Fix & resubmit" : "Edit"}</button><button class="link" data-del="${r.id}">Delete</button>` : ""}</td>
-      </tr>`).join("")}</tbody></table>`;
+      </tr>`).join("")).join("")}</tbody></table>`;
     $("my-list").querySelectorAll("[data-edit]").forEach(b => b.onclick = () => {
-      const r = data.find(x => x.id === b.dataset.edit);
-      editingId = r.id;
+      const r = myData.find(x => x.id === b.dataset.edit);
+      editingId = r.id; keptPaths = [...(r.attachments || [])]; removedPaths = [];
       $("e-date").value = r.work_date; $("e-hours").value = r.hours;
       $("e-assign").value = r.assignment; $("e-notes").value = r.notes || "";
+      $("e-files").value = "";
       $("form-title").textContent = "Edit entry";
       $("e-submit").textContent = "Save & resubmit";
       show("e-cancel", true);
+      renderExisting();
       window.scrollTo({ top: 0, behavior: "smooth" });
     });
     $("my-list").querySelectorAll("[data-del]").forEach(b => b.onclick = async () => {
       if (!confirm("Delete this entry?")) return;
+      const r = myData.find(x => x.id === b.dataset.del);
       const { error } = await db.from("entries").delete().eq("id", b.dataset.del);
-      if (error) flash("form-msg", error.message); else loadMine();
+      if (error) return flash("form-msg", error.message);
+      if (r && r.attachments && r.attachments.length) await db.storage.from(BUCKET).remove(r.attachments);
+      loadMine();
     });
   }
 
@@ -307,11 +420,12 @@
   }
 
   ["f-status","f-student","f-from","f-to"].forEach(id => $(id).onchange = () => loadReview());
+  $("f-sort").onchange = () => renderReview();
 
   async function loadReview() {
     flash("rv-msg", "");
     let q = db.from("entries").select("*, profiles!entries_student_id_fkey(full_name,email)")
-      .order("work_date", { ascending: false }).order("created_at", { ascending: false }).limit(500);
+      .order("work_date", { ascending: false }).limit(500);
     const st = $("f-status").value;
     if (st !== "all") q = q.eq("status", st);
     if ($("f-student").value) q = q.eq("student_id", $("f-student").value);
@@ -319,14 +433,21 @@
     if ($("f-to").value) q = q.lte("work_date", $("f-to").value);
     const { data, error } = await q;
     if (error) return flash("rv-msg", error.message);
+    rvData = data;
+    await signUrls(data.flatMap(r => r.attachments || []));
+    renderReview();
+  }
+
+  function renderReview() {
+    const data = rvData;
     const total = data.reduce((s, r) => s + Number(r.hours), 0);
     $("rv-summary").textContent = `${data.length} entries · ${fmtH(total)} hours`;
     if (!data.length) return ($("rv-list").innerHTML = `<p class="muted">Nothing here.</p>`);
-    $("rv-list").innerHTML = `<table><thead><tr><th>Student</th><th>Date</th><th>Assignment</th><th class="num">Hours</th><th>Review</th></tr></thead><tbody>${
-      data.map(r => `<tr>
+    const groups = groupByDay(data, $("f-sort").value);
+    $("rv-list").innerHTML = `<table><thead><tr><th>Student</th><th>Assignment</th><th class="num">Hours</th><th>Review</th></tr></thead><tbody>${
+      groups.map(g => dayRow(g, 4) + g.rows.map(r => `<tr>
         <td>${esc(r.profiles?.full_name || r.profiles?.email || "?")}</td>
-        <td>${esc(fmtDate(r.work_date))}</td>
-        <td>${esc(r.assignment)}${r.notes ? `<div class="muted">${esc(r.notes)}</div>` : ""}</td>
+        <td>${esc(r.assignment)}${r.notes ? `<div class="muted">${esc(r.notes)}</div>` : ""}${thumbs(r.attachments)}</td>
         <td class="num">${fmtH(r.hours)}</td>
         <td><span class="badge ${r.status}">${r.status}</span>
           ${r.reviewer_comment ? `<div class="muted">${esc(r.reviewer_comment)}</div>` : ""}
@@ -335,7 +456,7 @@
             <button class="ok" data-act="approved">Approve</button>
             <button class="bad" data-act="rejected">Reject</button>
           </div></td>
-      </tr>`).join("")}</tbody></table>`;
+      </tr>`).join("")).join("")}</tbody></table>`;
     $("rv-list").querySelectorAll(".reviewbox").forEach(box => {
       box.querySelectorAll("button").forEach(btn => btn.onclick = async () => {
         const comment = box.querySelector("input").value.trim();
